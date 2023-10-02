@@ -1,0 +1,189 @@
+---
+title: "Causal HW1"
+author: "Xiaoting Chen"
+date: "2023-09-25"
+output: pdf_document
+warning: FALSE 
+message: FALSE
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1.
+
+Explain the need for a control group in evaluating the effectiveness of a treatment by
+criticizing the following statement: "A study on the benefits of vitamin C showed that
+90% of the people suffering from a cold who take vitamin C get over their cold within a
+week."
+
+**Answer**:
+We know from life experience that the human's own immune system can help with the recovery from a cold. Even without taking any medication or other measures, people usually feel better after one week of a cold. Under the setting of the statement, we cannot tell if the recovery is truly due to the consumption of vitamin C (VC) or just the natural recovery process without comparing it to the data from a control group in which patients do not take VC. \
+This case illustrates that, without a control group, we cannot rule out the influence of other factors, and thus, we cannot accurately draw causal conclusions.
+
+
+## 2.
+
+In this problem, we will examine data from an experiment to test whether massive
+injection of silver iodide into cumulus clouds can lead to increased rainfall (Data from J.
+Simpson, A. Olsen and J. Eden, “A Bayesian Analysis of a Multiplicative Treatment
+Effect in Weather Modification,” Technometrics 17 (1975): 161-166). The experiment
+was carried out in southern Florida in 1968. On each of 52 days that were suitable for
+cloud seeding, a random mechanism was used to decide whether to seed or not (i.e., we
+randomly selected 26 days to receive the treatment and the other 26 days to receive
+control). A plane flew through the clouds each suitable day (both seeding and nonseeding days). The experimenter set up the plane to inject or not depending on the
+random outcome. The plane’s pilot did not know whether the seeding mechanism was
+loaded to inject or not. Precipitation was measured as total rain volume (in acre-feet)
+resulting from the clouds in the 24 hours following the plane’s run. The data for the
+treatment and the control group are as follows: \
+
+```{r}
+treated.r = c(2745.6, 1697.1, 1656.4, 978, 703.4, 489.1, 430, 334.1, 302.8, 274.7, 274.7,
+              255, 242.5, 200.7, 198.6, 129.6, 119, 118.3, 115.3, 92.4, 40.6, 32.7, 31.4, 17.5, 7.7, 4.1)
+control.r = c(1202.6, 830.1, 372.4, 345.5, 321.2, 244.3, 163, 147.8, 95, 87, 81.2, 68.5, 47.3,
+              41.1, 36.6, 29, 28.6, 26.3, 26, 24.4, 21.4, 17.3, 11.5, 4.9, 4.9, 1.0)
+```
+
+### a.
+Suppose we want to test Fisher’s sharp null hypothesis of no treatment effect vs. an
+alternative that the treatment increases precipitation. Use the difference in sample means
+as a test statistic and use the Monte Carlo simulation method to approximate the p-value,
+using 10,000 simulations.
+
+```{r MC function}
+treat.effect.samplemean.montecarlo.test.func=function(treated.r,control.r,K){
+  
+    # Create vectors for r and Z, and find total number in
+    # experiment and number of treated subjects
+     r=c(treated.r,control.r);
+     Z=c(rep(1,length(treated.r)),rep(0,length(control.r)));
+     N=length(r);
+     m=length(treated.r);
+     
+     # Observed test statistic
+     obs.test.stat=mean(r[Z==1])-mean(r[Z==0]);
+     
+     # Monte Carlo simulatoin
+     montecarlo.test.stat=rep(0,K);
+     for(i in 1:K){
+       treatedgroup=sample(1:N,m); # Draw random assignment
+       controlgroup=(1:N)[-treatedgroup];
+      # Compute test statistic for random assignment
+       montecarlo.test.stat[i]=mean(r[treatedgroup])-mean(r[controlgroup]);
+     }
+     
+     # Monte Carlo p-value is proportion of randomly drawn
+    # test statistics that are >= observed test statistic
+     pval=sum(montecarlo.test.stat>=obs.test.stat)/K;
+     # 95% CI for true p-value based on Monte Carlo p-value
+     lowerci=pval-1.96*sqrt(pval*(1-pval)/K);
+     upperci=pval+1.96*sqrt(pval*(1-pval)/K);
+     list(pval=pval,lowerci=lowerci,upperci=upperci);
+}
+
+```
+
+```{r P MC}
+set.seed(0)
+treat.effect.samplemean.montecarlo.test.func(treated.r,control.r,10000)
+```
+**Answer:*
+The approximated p-value using Monte Carlo simulation method is 0.021 [0.018, 0.023].
+
+
+### b.
+How accurate is the simulation approximation to the p-value?
+
+```{r fisher function}
+# Recursive function for finding all subsets of size r from the set (1,...,n)
+subsets=function(n,r,v=1:n){
+ if(r<=0) NULL else
+   if(r>=n) v[1:n] else
+     rbind(cbind(v[1],subsets(n-1,r-1,v[-1])),subsets(n-1,r,v[-1]))
+}
+
+
+treat.effect.samplemean.test.func=function(treated.r,control.r){
+  
+  # Create vectors for r and Z, and find total number in
+  # experiment and number of treated subjects
+   r=c(treated.r,control.r);
+   Z=c(rep(1,length(treated.r)),rep(0,length(control.r)));
+   N=length(r);
+   m=length(treated.r);
+   
+   # Observed test statistic
+   obs.test.stat=mean(r[Z==1])-mean(r[Z==0]);
+   
+   # Compute distribution of test statistic over random assignments
+   # Matrix that contains all possible assignments of subjects to the treated group
+   subsetmat=subsets(N,m);
+   # The r for each subject in the treated group in the
+   # assignments in subsetmat
+   treated.r.mat=matrix(r[t(subsetmat)],ncol=m,byrow=T)   ## why not multiply r and indication matrix?
+   # Sum of all the r’s
+   sum.r=sum(r)
+   # Mean of the treated and control groups for the assignments in subsetmat,
+   # and corresponding test statistic
+   mean.treated.r=apply(treated.r.mat,1,mean);
+   mean.control.r=(sum.r-(mean.treated.r)*m)/(N-m);
+   teststat=mean.treated.r-mean.control.r;
+   # p-value is the probability the test statistic under the
+   # null hypothesis would be greater than the observed test
+   # statistic
+   pval=sum(teststat>=obs.test.stat)/length(teststat);
+   pval;
+}
+```
+
+```{r P fisher}
+## takes very long to run
+
+```
+
+
+### c.
+The test statistic used above is sensitive to a change in the mean amount of rainfall (e.g., an additive effect). Make box plots of the treated and control outcomes, and argue that the additive treatment effect model may not be reasonable. Make box plots of the logarithm of rainfall and argue that the multiplicative treatment effect model, $r_{T_i}$ = $\delta r_{C_i}$ is reasonable
+
+```{r}
+boxplot(treated.r,control.r,names=c("Treated","Control"), ylab="Rain volume")
+title(main = "Box plots of the treated and control outcomes")
+```
+
+The treated group has a more dispersed distribution of rain volumn, thus the additive treatment effect model is not reasonable.
+
+```{r}
+boxplot(log(treated.r),log(control.r),names=c("log (treated.r)","log (control.r)"), ylab="Rain volume")
+```
+On the log scale, the distributions of treated and control groups appear to be similar, suggesting the multiplicative treatment effect model is more reasonable.
+
+
+### d.
+Perform a test of Fisher’s sharp null hypothesis of no treatment effect vs. an alternative that the treatment increases precipitation using the multiplicative treatment effect model and the Wilcoxon rank sum test statistic.\
+
+
+From question c. we know that the multiplicative treatment effect model suits the case, thus we log transform the data to transform it to an additive treatment model to perform Wilcoxon rank sum test with the alternative hythothesis that the treatment increases precipitation, which is $\delta > 1$ and $log(\delta) > 0$.
+```{r}
+# using normal approximation
+wilcox.test(log(treated.r)+0,log(control.r),alternative="greater",exact = FALSE)
+
+# exact p-value
+library(exactRankTests)
+wilcox.exact(log(treated.r)+0,log(control.r),alternative="greater",exact = FALSE)
+```
+The Wilcoxon rank sum test gives a p-value smaller than 0.05, suggesting there is evidence that the treatment increases precipitation under the multiplicative treatment effect model.
+
+
+
+### e.
+Find a 95% confidence interval for the effect of cloud seeding using the multiplicative treatment effect model and the Wilcoxon rank sum test statistic. \
+
+Invert the Wilcoxon rank sum test to form a confidence interval for model: $log(r_{T_i}) = log(r_{C_i}) + \beta$:
+```{r}
+wilcox.test(log(treated.r), log(control.r), conf.int=T,exact = FALSE)
+```
+The 95% confidence interval for $log(\delta)$ is [0.282, 2.097], thus under the multiplicative model the 95% confidence interval for $\delta$ is $[e^{0.282}, e^{2.097}] = [1.326, 8.142]$.
+
+### f.
+What conclusions do you draw about the effectiveness of cloud seeding? 
