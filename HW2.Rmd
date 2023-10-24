@@ -1,0 +1,53 @@
+---
+title: "Causal HW2"
+author: "Xiaoting Chen"
+date: "2023-10-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prep
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+dat <- read.csv("nhanesi_class_dataset.csv")
+```
+
+
+## a.
+
+income.poverty.ratio and dietary.adequacy have missing values (indicated by NA). Create indicator variables for whether income.poverty.ratio and dietary.adequacy have missing values and fill in the missing values with the mean of the observed values. [Note that education has a few missing values but Missing is already coded as a category for education].
+
+**hint**
+x_missing itself can be correlated to both Z and Y thus be a covariates
+```{r}
+
+```
+
+## b.
+
+Before matching, assess the balance of the confounders between the treated and control groups. Which confounders have absolute standardized differences greater than 0.1?
+
+**hint**
+report std.diff before matching
+```{r}
+
+```
+
+## c.
+
+Form optimal matched pairs using rank-based Mahalanobis distance with a propensity score caliper. Assess the balance of the confounders between the treated and control matched pairs. Compare the balance between the matched pairs with the balance between the unmatched treated and control groups. Construct a Love plot.
+
+
+**hint**
+code in L5
+
+```{r}
+
+```
