@@ -11,23 +11,49 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Prep
 
-```{r}
+```{r message=FALSE}
 library(tidyr)
 library(dplyr)
 library(ggplot2)
-
-dat <- read.csv("nhanesi_class_dataset.csv")
+library(MASS)
+library(optmatch)
 ```
 
+```{r}
+dat <- read.csv("nhanesi_class_dataset.csv")
+
+# recode categorical confounders into numerical
+lapply(dat[c("physically.inactive",'sex', "smoking.status", "race", "education", "working.last.three.months", 
+             "married", "alcohol.consumption")], 
+       unique)
+
+dat <- dat %>%
+  dplyr::select(-X) %>%
+  mutate(physically.inactive = ifelse(physically.inactive==TRUE, 1, 0),
+         sex = recode(sex, 'Female' = 1, 'Male' = 0),
+         smoking.status = recode(smoking.status, "Never"=1,  "Current"=2, "Former"=3),
+         race = recode(race, "Nonwhite"=0, "White"=1),
+         education = recode(education, "0-8"=1, "9-11"=2, "12"=3, "College Grad"=4, "Some College"=5, "Missing"=9),
+         working.last.three.months = ifelse(working.last.three.months==TRUE, 1, 0),
+         married = ifelse(married==TRUE, 1, 0),
+         alcohol.consumption = recode(alcohol.consumption, "Never"=1, "Just about everyday/everyday"=5, "1-4 times per month"=3,
+                                      "2+ times per week"=4,  "<1 time per month"=2))
+
+```
 
 ## a.
 
 income.poverty.ratio and dietary.adequacy have missing values (indicated by NA). Create indicator variables for whether income.poverty.ratio and dietary.adequacy have missing values and fill in the missing values with the mean of the observed values. [Note that education has a few missing values but Missing is already coded as a category for education].
 
-**hint**
-x_missing itself can be correlated to both Z and Y thus be a covariates
-```{r}
 
+```{r}
+dat$income_na = ifelse(is.na(dat$income.poverty.ratio),1,0)
+dat$diet_na = ifelse(is.na(dat$dietary.adequacy),1,0)
+
+dat$income.poverty.ratio[is.na(dat$income.poverty.ratio)] <- mean(dat$income.poverty.ratio, na.rm = TRUE)
+dat$dietary.adequacy[is.na(dat$dietary.adequacy)] <- mean(dat$dietary.adequacy, na.rm = TRUE)
+
+head(dat)
 ```
 
 ## b.
@@ -37,17 +63,142 @@ Before matching, assess the balance of the confounders between the treated and c
 **hint**
 report std.diff before matching
 ```{r}
+controlmat.before = dat[dat$physically.inactive == FALSE, ]
+controlmean.before = apply(controlmat.before,2,mean,na.rm=TRUE)
 
+treatedmat.before = dat[dat$physically.inactive == TRUE, ]
+treatmean = apply(treatedmat.before,2,mean,na.rm=TRUE)
+
+treatvar = apply(treatedmat.before,2,var,na.rm=TRUE)
+controlvar = apply(controlmat.before,2,var,na.rm=TRUE)
+stand.diff.before = (treatmean-controlmean.before)/sqrt((treatvar+controlvar)/2)
+stand.diff.before = stand.diff.before[-c(1,2)]
+stand.diff.before
 ```
+**Answer:**\
+confounders with absolute standardized differences greater than 0.1 are: \
+`r c(names(stand.diff.before)[abs(stand.diff.before) >0.1])`
 
 ## c.
 
 Form optimal matched pairs using rank-based Mahalanobis distance with a propensity score caliper. Assess the balance of the confounders between the treated and control matched pairs. Compare the balance between the matched pairs with the balance between the unmatched treated and control groups. Construct a Love plot.
 
+```{r}
+smahal=
+  function(z,X){
+    X<-as.matrix(X)
+    n<-dim(X)[1]
+    rownames(X)<-1:n
+    k<-dim(X)[2]
+    m<-sum(z)
+    for (j in 1:k) X[,j]<-rank(X[,j])
+    cv<-cov(X)
+    vuntied<-var(1:n)
+    rat<-sqrt(vuntied/diag(cv))
+    cv<-diag(rat)%*%cv%*%diag(rat)
+    out<-matrix(NA,m,n-m)
+    Xc<-X[z==0,]
+    Xt<-X[z==1,]
+    rownames(out)<-rownames(X)[z==1]
+    colnames(out)<-rownames(X)[z==0]
+    library(MASS)
+    icov<-ginv(cv)
+    for (i in 1:m) out[i,]<-mahalanobis(Xc,Xt[i,],icov,inverted=T)
+    out
+  }
 
-**hint**
-code in L5
+# Function for adding a propensity score caliper to a distance matrix dmat
+# calipersd is the caliper in terms of standard deviation of the logit propensity scoe
+addcaliper=function(dmat,z,logitp,calipersd=.2,penalty=1000){
+  sd.logitp=sd(logitp)
+  adif=abs(outer(logitp[z==1],logitp[z==0],"-"))
+  adif=(adif-(calipersd*sd.logitp))*(adif>(calipersd*sd.logitp))
+  dmat=dmat+adif*penalty
+  dmat
+}
+
+```
+
+```{r}
+propscore.model=glm(physically.inactive~.,family=binomial,x=TRUE,y=TRUE, data=dat[,-2])
+treated=propscore.model$y
+logit.propscore=predict(propscore.model)
+dat$logit.ps = logit.propscore
+```
+
 
 ```{r}
 
+# Matrix of covariates, excluding intercept
+Xmat=propscore.model$x[,-1]
+# Matrix of covariates to include in the Mahalanobis distance
+Xmatmahal=subset(dat,select=c(sex,smoking.status,income.poverty.ratio,age.at.interview,race,education,
+                              working.last.three.months,married,alcohol.consumption,dietary.adequacy,
+                              income_na,diet_na))
+
+# Rank based Mahalanobis distance
+distmat=smahal(dat$physically.inactive,Xmatmahal)
+# Add caliper
+distmat2=addcaliper(distmat,dat$physically.inactive,dat$logit.ps,calipersd=.5)
+
+### Name the rows and columns of distance matrix by the subject numbers in treated
+# Label the rows and columns of the distance matrix by the rownames in dat
+rownames(distmat2)=rownames(dat)[dat$physically.inactive==1]
+colnames(distmat2)=rownames(dat)[dat$physically.inactive==0]
+
+# Matching
+nocontrols.per.match=1
+matchvec=pair(distmat2,controls=nocontrols.per.match,data=dat)
+dat$matchvec=matchvec
+
+## Create a matrix saying which control units each treated unit is matched to
+## Create vectors of the subject indices of the treatment units ordered by
+## their matched set and corresponding control unit
+treated.subject.index=rep(0,sum(treated==1))
+matched.control.subject.index.mat=matrix(rep(0,nocontrols.per.match*length(treated.subject.index)),
+                                         ncol=nocontrols.per.match)
+matchedset.index=substr(matchvec,start=3,stop=10)
+matchedset.index.numeric=as.numeric(matchedset.index)
+for(i in 1:length(treated.subject.index)){
+  matched.set.temp=which(matchedset.index.numeric==i)
+  treated.temp.index=which(dat$physically.inactive[matched.set.temp]==1)
+  treated.subject.index[i]=matched.set.temp[treated.temp.index]
+  matched.control.subject.index.mat[i,]=matched.set.temp[-treated.temp.index]
+}
+
+matched.control.subject.index=matched.control.subject.index.mat
+
 ```
+
+```{r}
+### Check balance
+# Calculate standardized differences 
+# Covariates used in propensity score model
+Xmat=propscore.model$x;
+
+treatedmat=Xmat[treated==1,];
+# Standardized differences before matching
+controlmat.before=Xmat[treated==0,];
+controlmean.before=apply(controlmat.before,2,mean,na.rm=TRUE);
+treatmean=apply(treatedmat,2,mean,na.rm=TRUE);
+treatvar=apply(treatedmat,2,var,na.rm=TRUE);
+controlvar=apply(controlmat.before,2,var,na.rm=TRUE);
+stand.diff.before=(treatmean-controlmean.before)/sqrt((treatvar+controlvar)/2);
+# Standardized differences after matching
+controlmat.after=Xmat[matched.control.subject.index,];
+controlmean.after=apply(controlmat.after,2,mean);
+# Standardized differences after matching
+stand.diff.after=(treatmean-controlmean.after)/sqrt((treatvar+controlvar)/2)
+```
+
+```{r}
+
+abs.stand.diff.before=abs(stand.diff.before[-1])
+abs.stand.diff.after=abs(stand.diff.after[-1])
+covariates=names(stand.diff.before[-1])
+plot.dataframe=data.frame(abs.stand.diff=c(abs.stand.diff.before,abs.stand.diff.after),covariates=rep(covariates,2),type=c(rep("Before",length(covariates)),rep("After",length(covariates))))
+ggplot(plot.dataframe,aes(x=abs.stand.diff,y=covariates))+geom_point(size=5,aes(shape=factor(type)))+scale_shape_manual(values=c(4,1))+geom_vline(xintercept=c(.1,.2),lty=2)
+
+```
+
+The love plot comparing the balance between the matched pairs with the balance between the unmatched treated and control groups clearly shows that optimal matching using rank-based Mahalanobis distance with a propensity score caliper greatly improved covariate balance. After matching, only one covariate is having "acceptable" balance while all other covariates have ideal balance based on standardized difference. 
