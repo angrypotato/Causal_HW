@@ -1,0 +1,335 @@
+---
+title: "Causal HW2"
+author: "Xiaoting Chen"
+date: "2023-10-23"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prep
+
+```{r message=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(optmatch)
+```
+
+```{r}
+dat <- read.csv("nhanesi_class_dataset.csv")
+
+# recode categorical confounders into numerical
+lapply(dat[c("physically.inactive",'sex', "smoking.status", "race", "education", "working.last.three.months", 
+             "married", "alcohol.consumption")], 
+       unique)
+
+dat <- dat %>%
+  dplyr::select(-X) %>%
+  mutate(physically.inactive = ifelse(physically.inactive==TRUE, 1, 0),
+         sex = recode(sex, 'Female' = 1, 'Male' = 0),
+         smoking.status = recode(smoking.status, "Never"=1,  "Current"=2, "Former"=3),
+         race = recode(race, "Nonwhite"=0, "White"=1),
+         education = recode(education, "0-8"=1, "9-11"=2, "12"=3, "College Grad"=4, "Some College"=5, "Missing"=9),
+         working.last.three.months = ifelse(working.last.three.months==TRUE, 1, 0),
+         married = ifelse(married==TRUE, 1, 0),
+         alcohol.consumption = recode(alcohol.consumption, "Never"=1, "Just about everyday/everyday"=5, 
+                                      "1-4 times per month"=3,
+                                      "2+ times per week"=4,  "<1 time per month"=2))
+
+```
+
+```{r}
+# check missingness
+colSums(is.na(dat))
+
+# impute the missingness in income.poverty.ratio and dietary.adequacy with mean value
+
+dat <- dat %>%
+  mutate(income.poverty.ratio = ifelse(is.na(income.poverty.ratio), 
+                                       mean(income.poverty.ratio, na.rm = TRUE), income.poverty.ratio),
+         dietary.adequacy = ifelse(is.na(dietary.adequacy),
+                                   mean(dietary.adequacy, na.rm = TRUE), dietary.adequacy))
+```
+
+## a.
+
+Consider matching 2 controls to each treated unit.  Is there adequate balance to do so?  If there is, consider matching 3 controls to each treated unit and decide if there is adequate balance to do so.
+
+```{r}
+# Fit a propensity score model
+propscore.model=glm(physically.inactive~.,family=binomial,x=TRUE,y=TRUE, data=dat[,-2]);
+datatemp=drop_na(dat)
+datatemp$outcome=datatemp$years.lived.since.1971.up.to.1992
+
+# according to propscore.model result 
+# consider income.poverty.ratio, working.last.three.months, married, dietary.adequacy 
+# as prognostically important
+Xmatmahal=subset(datatemp,select=c(income.poverty.ratio,working.last.three.months, married, dietary.adequacy ))
+nocontrols.per.match=2
+
+datatemp$treated=propscore.model$y
+treated=datatemp$treated
+datatemp$logit.ps=predict(propscore.model)
+
+rownames(datatemp)=seq(1,nrow(datatemp),1) # Make the rownames in datatemp be 1:number of rows
+
+# Function for computing rank based Mahalanobis distance. 
+smahal=
+  function(z,X){
+    X<-as.matrix(X)
+    n<-dim(X)[1]
+    rownames(X)<-1:n
+    k<-dim(X)[2]
+    m<-sum(z)
+    for (j in 1:k) X[,j]<-rank(X[,j])
+    cv<-cov(X)
+    vuntied<-var(1:n)
+    rat<-sqrt(vuntied/diag(cv))
+    cv<-diag(rat)%*%cv%*%diag(rat)
+    out<-matrix(NA,m,n-m)
+    Xc<-X[z==0,]
+    Xt<-X[z==1,]
+    rownames(out)<-rownames(X)[z==1]
+    colnames(out)<-rownames(X)[z==0]
+    library(MASS)
+    icov<-ginv(cv)
+    for (i in 1:m) out[i,]<-mahalanobis(Xc,Xt[i,],icov,inverted=T)
+    out
+  }
+
+# Function for adding a propensity score caliper to a distance matrix dmat
+# calipersd is the caliper in terms of standard deviation of the logit propensity scoe
+addcaliper=function(dmat,z,logitp,calipersd=.2,penalty=1000){
+  sd.logitp=sd(logitp)
+  adif=abs(outer(logitp[z==1],logitp[z==0],"-"))
+  adif=(adif-(calipersd*sd.logitp))*(adif>(calipersd*sd.logitp))
+  dmat=dmat+adif*penalty
+  dmat
+}
+
+# Matrix of covariates, excluding intercept
+Xmat=propscore.model$x[,-1]
+
+# Rank based Mahalanobis distance
+distmat=smahal(datatemp$treated,Xmatmahal)
+# Add caliper
+distmat2=addcaliper(distmat,datatemp$treated,datatemp$logit.ps,calipersd=.5)
+
+### Name the rows and columns of distance matrix by the subject numbers in treated
+# Label the rows and columns of the distance matrix by the rownames in datatemp
+rownames(distmat2)=rownames(datatemp)[datatemp$treated==1]
+colnames(distmat2)=rownames(datatemp)[datatemp$treated==0]
+
+```
+
+```{r}
+# Matching
+library(optmatch)
+matchvec=pair(distmat2,controls=nocontrols.per.match,data=datatemp)
+datatemp$matchvec=matchvec
+
+## Create a matrix saying which control units each treated unit is matched to
+## Create vectors of the subject indices of the treatment units ordered by
+## their matched set and corresponding control unit
+treated.subject.index=rep(0,sum(treated==1))
+matched.control.subject.index.mat=matrix(rep(0,nocontrols.per.match*length(treated.subject.index)),ncol=nocontrols.per.match)
+matchedset.index=substr(matchvec,start=3,stop=10)
+matchedset.index.numeric=as.numeric(matchedset.index)
+for(i in 1:length(treated.subject.index)){
+  matched.set.temp=which(matchedset.index.numeric==i)
+  treated.temp.index=which(datatemp$treated[matched.set.temp]==1)
+  treated.subject.index[i]=matched.set.temp[treated.temp.index]
+  matched.control.subject.index.mat[i,]=matched.set.temp[-treated.temp.index]
+}
+
+matched.control.subject.index=matched.control.subject.index.mat
+
+```
+
+```{r}
+### Check balance
+# Calculate standardized differences 
+# Covariates used in propensity score model
+Xmat=propscore.model$x;
+
+treatedmat=Xmat[treated==1,];
+# Standardized differences before matching
+controlmat.before=Xmat[treated==0,];
+controlmean.before=apply(controlmat.before,2,mean,na.rm=TRUE);
+treatmean=apply(treatedmat,2,mean,na.rm=TRUE);
+treatvar=apply(treatedmat,2,var,na.rm=TRUE);
+controlvar=apply(controlmat.before,2,var,na.rm=TRUE);
+stand.diff.before=(treatmean-controlmean.before)/sqrt((treatvar+controlvar)/2);
+# Standardized differences after matching
+controlmat.after=Xmat[matched.control.subject.index,];
+controlmean.after=apply(controlmat.after,2,mean,na.rm=TRUE);
+# Standardized differences after matching
+stand.diff.after=(treatmean-controlmean.after)/sqrt((treatvar+controlvar)/2)
+
+# love plot
+abs.stand.diff.before=abs(stand.diff.before[-1])
+abs.stand.diff.after=abs(stand.diff.after[-1])
+covariates=names(stand.diff.before[-1])
+plot.dataframe=data.frame(abs.stand.diff=c(abs.stand.diff.before,abs.stand.diff.after),covariates=rep(covariates,2),type=c(rep("Before",length(covariates)),rep("After",length(covariates))))
+ggplot(plot.dataframe,aes(x=abs.stand.diff,y=covariates))+geom_point(size=5,aes(shape=factor(type)))+scale_shape_manual(values=c(4,1))+geom_vline(xintercept=c(.1,.2),lty=2)
+```
+**Answer:**\
+As shown on the love plot, there is no adequate balance to match 2 controls to each treated unit. 
+
+
+## b.
+
+Construct a full matching and check balance of confounders after matching.
+
+```{r}
+diff.propensity.score.mat=outer(datatemp$logit.ps[datatemp$treated==1],datatemp$logit.ps[datatemp$treated==0],"-")
+distmat.propensity=abs(diff.propensity.score.mat)
+# Label the rows and columns of the distance matrix by the rownames in datatemp
+rownames(distmat.propensity)=rownames(datatemp)[datatemp$treated==1]
+colnames(distmat.propensity)=rownames(datatemp)[datatemp$treated==0]
+
+matchvec=fullmatch(distmat.propensity,data=datatemp)
+datatemp$matchvec=matchvec
+#stratumStructure(matchvec)
+#effectiveSampleSize(matchvec)
+```
+
+```{r}
+# check balance
+
+# Number the strata
+matchedset.index=substr(matchvec,start=3,stop=10)
+matchedset.index.numeric=as.numeric(matchedset.index)
+
+# Calculate standardized difference before and after a full match
+# Calculate standardized difference before and after a full match
+# Drop observations with missing values from the calculations
+# stratum.myindex should contain strata for each subject, 0 means a unit was not 
+# matched
+# Use harmonic mean weights
+standardized.diff.harmonic.func=function(x,treatment,stratum.myindex,missing=rep(0,length(x))){
+  xtreated=x[treatment==1 & missing==0];
+  xcontrol=x[treatment==0 & missing==0];
+  var.xtreated=var(xtreated);
+  var.xcontrol=var(xcontrol);
+  combinedsd=sqrt(.5*(var.xtreated+var.xcontrol));
+  std.diff.before.matching=(mean(xtreated)-mean(xcontrol))/combinedsd;
+  nostratum=length(unique(stratum.myindex))-1*max(stratum.myindex==0);
+  if(max(stratum.myindex==0)==0){
+    stratumlist=sort(unique(stratum.myindex))
+  }
+  if(max(stratum.myindex==0)==1){
+    templist=sort(unique(stratum.myindex))
+    stratumlist=templist[-1]
+  }
+  diff.in.stratum=rep(0,nostratum);
+  number.in.stratum=rep(0,nostratum);
+  harmonic.weight=rep(0,nostratum)
+  for(i in 1:nostratum){
+    if(sum(stratum.myindex==stratumlist[i] & treatment==1 & missing==0)==0 | sum(stratum.myindex==stratumlist[i] & treatment==0 & missing==0)==0){
+      number.in.stratum[i]=0
+    }
+    if(sum(stratum.myindex==stratumlist[i] & treatment==1 & missing==0)>0 & sum(stratum.myindex==stratumlist[i] & treatment==0 & missing==0)>0){
+      diff.in.stratum[i]=mean(x[stratum.myindex==stratumlist[i] & treatment==1 & missing==0])-mean(x[stratum.myindex==stratumlist[i] & treatment==0 & missing==0]);
+      number.in.stratum[i]=sum(stratum.myindex==stratumlist[i])
+      harmonic.weight[i]=1/(.5/sum(stratum.myindex==stratumlist[i] & treatment==1)+.5/sum(stratum.myindex==stratumlist[i] & treatment==0))
+    }
+  }
+  std.diff.after.matching=(sum(harmonic.weight*diff.in.stratum)/sum(harmonic.weight))/combinedsd;
+  list(std.diff.before.matching=std.diff.before.matching,std.diff.after.matching=std.diff.after.matching);
+}
+
+# Covariates used in propensity score model
+Xmat=propscore.model$x;
+
+
+Xmat.without.missing=Xmat
+
+# Calculate the standardized differences
+std.diff.before=rep(0,ncol(Xmat.without.missing));
+std.diff.after=rep(0,ncol(Xmat.without.missing));
+names(std.diff.before)=names(Xmat[1,]);
+names(std.diff.after)=names(Xmat[1,]);
+for(i in 1:ncol(Xmat.without.missing)){
+missing.temp=is.na(Xmat.without.missing[,i])
+temp.stand.diff=standardized.diff.harmonic.func(Xmat.without.missing[,i],datatemp$treated,matchedset.index.numeric,missing.temp);
+std.diff.before[i]=temp.stand.diff$std.diff.before.matching;
+std.diff.after[i]=temp.stand.diff$std.diff.after.matching;
+}
+
+# Rename std.diff.before and std.diff.after to shorter names sd.bf and sd.af
+# and use digits option to be able to columns of std.diff.before and 
+# std.diff.after in one row
+sd.bf=std.diff.before
+sd.af=std.diff.after
+
+# love plot
+abs.sd.bf=abs(sd.bf[-1])
+abs.sd.af=abs(sd.af[-1])
+covariates=names(sd.bf[-1])
+plot.dataframe=data.frame(abs.stand.diff=c(abs.sd.bf,abs.sd.af),covariates=rep(covariates,2),type=c(rep("Before",length(covariates)),rep("After",length(covariates))))
+ggplot(plot.dataframe,aes(x=abs.stand.diff,y=covariates))+geom_point(size=5,aes(shape=factor(type)))+scale_shape_manual(values=c(4,1))+geom_vline(xintercept=c(.1,.2),lty=2)
+```
+**Answer:**\
+The balance looks good after full matching
+
+
+## c.
+
+Among pair matching (conducted in HW 2), matching with 2 controls, matching with 3 controls, and full matching, which one would you choose for the downstream outcome analyses?  Justify your answer.  
+
+**Answer:**\
+Among pair matching (conducted in HW 2), matching with 2 controls, and full matching, full matching methods achieved the best balance of covariates betweeen treated and control groups, so I will proceed with the full matching pseudo dataset.
+
+
+## d.
+
+Using your chosen matching from (c), find a point estimate and 95% confidence interval for the effect of being physically inactive compared to being physically active on years.lived.since.1971.up.to.1992.  
+
+```{r}
+# Put data into format for senfmCI function
+library(sensitivityfull)
+stratum.myindex=matchedset.index.numeric
+nostratum=length(unique(stratum.myindex))-1*max(stratum.myindex==0);
+if(max(stratum.myindex==0)==0){
+  stratumlist=sort(unique(stratum.myindex))
+}
+if(max(stratum.myindex==0)==1){
+  templist=sort(unique(stratum.myindex))
+  stratumlist=templist[-1]
+}
+treated1=rep(0,nostratum)
+stratumsize=rep(0,nostratum)
+for(i in 1:nostratum){
+  stratumsize[i]=sum(stratum.myindex==stratumlist[i])
+}
+
+y=matrix(rep(NA,nostratum*max(stratumsize)),nrow=nostratum)
+for(i in 1:nostratum){
+  no.treated.in.stratum=sum(stratum.myindex==stratumlist[i] & datatemp$treated==1)
+  no.control.in.stratum=sum(stratum.myindex==stratumlist[i] & datatemp$treated==0)
+  treated.in.stratum=which(stratum.myindex==stratumlist[i] & datatemp$treated==1)
+  control.in.stratum=which(stratum.myindex==stratumlist[i] & datatemp$treated==0)  
+  if(no.treated.in.stratum==1){
+    y[i,1]=datatemp$outcome[treated.in.stratum]
+    y[i,2:(no.control.in.stratum+1)]=datatemp$outcome[control.in.stratum]
+    treated1[i]=1
+  }
+  if(no.treated.in.stratum>1){
+    y[i,1]=datatemp$outcome[control.in.stratum]
+    y[i,2:(no.treated.in.stratum+1)]=datatemp$outcome[treated.in.stratum]
+    treated1[i]=0
+  }
+}
+
+treated1=as.logical(treated1)
+senfmCI(y,treated1)    
+
+```
+
+**Answer:**\
+Assuming no unmeasured confounding, there is evidence that being physically inactive caused one to live shorter. The point estimate is -1.8 years and the 95% confidence interval is (-2.6 years, -1.2 years).  
