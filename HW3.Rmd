@@ -178,7 +178,7 @@ plot.dataframe=data.frame(abs.stand.diff=c(abs.stand.diff.before,abs.stand.diff.
 ggplot(plot.dataframe,aes(x=abs.stand.diff,y=covariates))+geom_point(size=5,aes(shape=factor(type)))+scale_shape_manual(values=c(4,1))+geom_vline(xintercept=c(.1,.2),lty=2)
 ```
 **Answer:**\
-As shown on the love plot, there is no adequate balance to match 2 controls to each treated unit. 
+As shown on the love plot, there is no adequate balance to match 2 controls to each treated unit. Thus we will not further proceed with 3 controls. 
 
 
 ## b.

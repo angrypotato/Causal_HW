@@ -1,0 +1,62 @@
+---
+title: "Untitled"
+author: "Xiaoting Chen"
+date: "2023-11-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**report maximum pvalue for sensitivity analysis**
+
+
+## 1. 
+
+Consider question 1 from Homework 3 about the effect of being physically active on
+living longer. Use one of your matchings from Homework 3 (e.g., your pair matching) to
+perform a sensitivity analysis.
+
+### (a) 
+Up to what value of is there still evidence that being physically active causes
+you to live longer (under the significance level 0.05)?
+
+```{r}
+# if choose fullmatching
+library(sensitivityfull)
+```
+
+## 2. 
+Dynarski (2003, American Economic Review) asked the question: does offering
+financial aid to college students affect college attendance? During the period 1979-1981,
+the Social Security Student Benefit provided substantial college tuition aid for a high
+school senior whose father had died. Dynarski compared college attendance for high
+school seniors who had a deceased father. The data are in the file educationaid7981.csv
+on the course website. The potential confounders we would like to control for are family
+income (faminc), income missing (incmiss), black, hispanic, the Armed Forces
+Qualification Test (afqtpct), whether mother attended college (momcoll), whether father
+attended college (fathercoll) and gender (female)1
+. The treatment indicator f_dead is 1 for
+a senior whose father is deceased and 0 for other seniors. The outcome is attend.college
+(1 if the person has attended college by age 23, 0 if not).
+
+### (a) 
+Construct a match with adequate balance and test whether having a deceased
+father increases college attendance under the assumption of no unmeasured
+confounding (you could consider several matches and choose the one you think is
+best, but make sure to choose the match before testing the outcome to preserve the
+blinding advantages of matching).
+
+```{r}
+
+```
+
+### (b) 
+Conduct a sensitivity analysis to address concerns about unmeasured
+confounding.
+```{r}
+
+```
+
+
